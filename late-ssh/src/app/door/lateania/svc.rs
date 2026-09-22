@@ -47,7 +47,7 @@ use crate::app::{
 };
 use crate::render_signal::RenderSignal;
 
-use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
+use super::abilities::{Ability, AbilityEffect, learned_at, ordered_for, unlocked_for};
 use super::appearance;
 use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
 use super::crafting::{recipe, recipe_indices_for};
@@ -2239,6 +2239,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.use_ability(user_id, slot));
     }
 
+    /// Swap two abilities on the player's action bar (1-based slots).
+    pub fn swap_ability_task(&self, user_id: Uuid, source: u8, target: u8) {
+        self.mutate(user_id, move |s| s.swap_abilities(user_id, source, target));
+    }
+
     pub fn flee_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.flee(user_id));
     }
@@ -2676,6 +2681,10 @@ struct PlayerState {
     /// Kills counted toward the current starter stage, when it is a slay
     /// stage. Persisted alongside.
     starter_kills: u32,
+    /// The player's ability-bar order as ability ids, resolved through
+    /// `abilities::ordered_for`. Empty means the natural unlock order.
+    /// Persisted across sessions (schema v21).
+    ability_order: Vec<u32>,
     /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
     archetype: Option<&'static ArchetypeDef>,
     /// The combat companion at the player's heel, bought or tamed; travels
@@ -4045,6 +4054,7 @@ impl WorldState {
             quest_cooldowns: Vec::new(),
             starter_stage: 0,
             starter_kills: 0,
+            ability_order: Vec::new(),
             archetype: None,
             pet: None,
             kennel: Kennel::default(),
@@ -4351,6 +4361,7 @@ impl WorldState {
                 saved.starter_stage.min(chain_len)
             };
             p.starter_kills = saved.starter_kills;
+            p.ability_order = saved.ability_order.clone();
             p.rpg_mode = saved.rpg_mode;
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
@@ -4500,6 +4511,7 @@ impl WorldState {
             pvp_kills: p.pvp_kills,
             starter_stage: p.starter_stage,
             starter_kills: p.starter_kills,
+            ability_order: p.ability_order.clone(),
         }))
     }
 
@@ -6505,7 +6517,7 @@ impl WorldState {
         if player.respawn_at.is_some() {
             return;
         }
-        let known = unlocked_for(class, player.level);
+        let known = ordered_for(unlocked_for(class, player.level), &player.ability_order);
         let Some(ability) = known.get(slot.saturating_sub(1) as usize).copied() else {
             self.log_to(
                 user_id,
@@ -6554,6 +6566,39 @@ impl WorldState {
             p.cooldowns.insert(ability.id, ability.cooldown_ticks);
         }
         self.apply_ability(user_id, class, ability);
+    }
+
+    /// Swap two abilities on the player's action bar (1-based slots). Both must
+    /// name rows in the current ordered roster; the resulting order is written
+    /// back to `ability_order` so it persists across sessions.
+    fn swap_abilities(&mut self, user_id: Uuid, source: u8, target: u8) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        let Some(class) = player.class else {
+            return;
+        };
+        let known = ordered_for(unlocked_for(class, player.level), &player.ability_order);
+        let (Some(si), Some(ti)) = (
+            source.checked_sub(1).map(|i| i as usize),
+            target.checked_sub(1).map(|i| i as usize),
+        ) else {
+            return;
+        };
+        if si >= known.len() || ti >= known.len() || si == ti {
+            return;
+        }
+        let mut order: Vec<u32> = known.iter().map(|a| a.id).collect();
+        order.swap(si, ti);
+        let (src, dst) = (known[si].name, known[ti].name);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.ability_order = order;
+        }
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!("{src} and {dst} trade places on your bar."),
+        );
     }
 
     fn apply_ability(&mut self, user_id: Uuid, class: Class, ability: &Ability) {
@@ -10542,18 +10587,21 @@ impl WorldState {
                 };
 
             let abilities: Vec<AbilityView> = match player.class {
-                Some(c) => unlocked_for(c, player.level)
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| AbilityView {
-                        slot: (i + 1) as u8,
-                        name: a.name.to_string(),
-                        cost: a.cost,
-                        ready: player.cooldowns.get(&a.id).copied().unwrap_or(0) == 0
-                            && player.resource >= a.cost,
-                        effect: a.effect.label().to_string(),
-                    })
-                    .collect(),
+                Some(c) => {
+                    let known = ordered_for(unlocked_for(c, player.level), &player.ability_order);
+                    known
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| AbilityView {
+                            slot: (i + 1) as u8,
+                            name: a.name.to_string(),
+                            cost: a.cost,
+                            ready: player.cooldowns.get(&a.id).copied().unwrap_or(0) == 0
+                                && player.resource >= a.cost,
+                            effect: a.effect.label().to_string(),
+                        })
+                        .collect()
+                }
                 None => Vec::new(),
             };
 

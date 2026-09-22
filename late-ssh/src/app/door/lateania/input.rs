@@ -518,10 +518,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             } else if panel == Panel::Appearance {
                 // The secondary action cycles the trait the other way.
                 state.cycle_appearance(-1);
+            } else if panel == Panel::Abilities {
+                // First press arms the selected ability for swapping; the
+                // second press (on the target row) swaps them.
+                state.ability_swap_selection();
             } else if in_list {
                 state.sell_selection();
-            } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
-            {
+            } else if panel == Panel::Room || panel == Panel::Character {
                 state.attack();
             }
             InputAction::Handled
