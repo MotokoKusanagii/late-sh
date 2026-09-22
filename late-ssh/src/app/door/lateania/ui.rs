@@ -5903,6 +5903,7 @@ fn abilities_panel(
     lines.push(hint("0", "casts slot 10 while adventuring"));
     if swap_source.is_some() {
         lines.push(hint("x", "confirm target"));
+        lines.push(hint("r", "reset to natural order"));
     } else {
         lines.push(hint("x", "swap the selected ability"));
     }

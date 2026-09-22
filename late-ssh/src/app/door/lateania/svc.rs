@@ -2244,6 +2244,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.swap_abilities(user_id, source, target));
     }
 
+    /// Drop the player's custom ability-bar order (back to the natural order).
+    pub fn reset_ability_order_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.reset_ability_order(user_id));
+    }
+
     pub fn flee_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.flee(user_id));
     }
@@ -6598,6 +6603,25 @@ impl WorldState {
             user_id,
             LogKind::System,
             format!("{src} and {dst} trade places on your bar."),
+        );
+    }
+
+    /// Drop the player's custom ability-bar order, returning the bar to the
+    /// natural unlock order. Idempotent for a character who never reordered.
+    fn reset_ability_order(&mut self, user_id: Uuid) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.ability_order.is_empty() {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.ability_order.clear();
+        }
+        self.log_to(
+            user_id,
+            LogKind::System,
+            "Your abilities are back in their natural order.".to_string(),
         );
     }
 

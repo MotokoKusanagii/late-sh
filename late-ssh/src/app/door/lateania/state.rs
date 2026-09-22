@@ -915,6 +915,20 @@ impl State {
         }
     }
 
+    /// `r` while a swap source is armed in the Abilities panel: drop the saved
+    /// custom order and return the bar to its natural unlock order. Only offered
+    /// in swap mode so `r` keeps its recall meaning everywhere else.
+    pub fn ability_reset_order(&mut self) {
+        if self.panel != Panel::Abilities || self.ability_swap_source.is_none() {
+            return;
+        }
+        if !self.ensure_player_present() {
+            return;
+        }
+        self.ability_swap_source = None;
+        self.svc.reset_ability_order_task(self.user_id);
+    }
+
     pub fn flee(&mut self) {
         if self.ensure_player_present() {
             self.svc.flee_task(self.user_id);
